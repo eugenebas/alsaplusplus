@@ -87,7 +87,6 @@ int PCMDevice::set_hardware_params(HwParams params)
     }
 
     snd_pcm_uframes_t psize;
-
     if ((err = snd_pcm_hw_params_get_period_size(hw_params, &psize, 0)) < 0)
     {
       handle_error_code(err, false, "Could not get period size for PCM object.");
@@ -154,6 +153,58 @@ PCMPlayer::PCMPlayer(std::string hw_device) :
   PCMDevice(hw_device, SND_PCM_STREAM_PLAYBACK)
 {
 }
+
+int PCMPlayer::play_interleaved(const char* wav, int size)
+{
+    if (size == 0)
+    {
+      handle_error_code(static_cast<int>(std::errc::bad_file_descriptor), false, "Provided audio sample vector was empty.");
+      return static_cast<int>(std::errc::bad_file_descriptor);
+    }
+
+    snd_pcm_state_t hw_state = snd_pcm_state(pcm_handle);
+
+    if (hw_state == SND_PCM_STATE_PREPARED || hw_state == SND_PCM_STATE_RUNNING)
+    {
+      size_t frames_remaining = size;
+      snd_pcm_uframes_t	count=0, frames;
+      do
+        {
+		  frames = snd_pcm_writei(pcm_handle, wav + count, frames_remaining - count);
+
+          // If an error, try to recover from it
+          if (frames < 0)
+            frames = snd_pcm_recover(pcm_handle, frames, 0);
+          if (frames < 0)
+          {
+            std::cout << "Error playing wave: " << snd_strerror(frames) << std::endl;
+			break;
+		  }
+
+          // Update our pointer
+          count += frames;
+      } while (count < frames_remaining);
+
+      // Wait for playback to completely finish
+      if (count == frames_remaining)
+		snd_pcm_drain(pcm_handle);
+    }
+    else
+    {
+      std::ostringstream oss;
+      oss << "Could not start playback - device in state " << snd_pcm_state_name(hw_state) << " instead of SND_PCM_STATE_PREPARED or SND_PCM_STATE_RUNNING.";
+      handle_error_code(static_cast<int>(std::errc::bad_file_descriptor), false, oss.str());
+      return static_cast<int>(std::errc::bad_file_descriptor);
+    }
+
+  return 0;
+}
+
+void PCMPlayer::stop()
+{
+  snd_pcm_drop(pcm_handle);
+}
+
 
 PCMRecorder::PCMRecorder(std::string hw_device) :
   PCMDevice(hw_device, SND_PCM_STREAM_CAPTURE)

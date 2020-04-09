@@ -45,6 +45,9 @@ namespace AlsaPlusPlus
         int play_interleaved(const std::vector<SAMPLE_TYPE>& audio_samples);
       template <typename SAMPLE_TYPE>
         int play_noninterleaved(const std::vector<std::vector<SAMPLE_TYPE>>& audio_streams);
+
+     int play_interleaved(const char* wav, int size);
+     void stop();
   };
 
   class PCMRecorder :
