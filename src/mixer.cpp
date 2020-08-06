@@ -33,8 +33,6 @@ Mixer::Mixer(std::string hw_device, std::string volume_element_name) :
     oss << "Could not find simple mixer element named " << simple_elem_name << ".";
     handle_error_code(static_cast<int>(std::errc::argument_out_of_domain), true, oss.str());
   }
-  if ((err = snd_mixer_selem_set_playback_volume_range (element_handle, MINIMAL_VOLUME, MAXIMUM_VOLUME)) < 0)
-    handle_error_code(err, true, "Cannot set element volume range.");
 }
 
 Mixer::~Mixer()
@@ -106,42 +104,57 @@ bool Mixer::element_exists(std::string hw_device, std::string element_name)
     snd_mixer_close(temp_handle);
     return false;
   }
-  
+
   snd_mixer_close(temp_handle);
   return true;
 }
 
 
-float Mixer::dec_vol_pct(float pct, snd_mixer_selem_channel_id_t channel)
+float Mixer::dec_vol_pct(float pct, bool mapped, snd_mixer_selem_channel_id_t channel)
 {
   trim_pct(pct);
-  float cur_vol = get_cur_vol_pct(channel);
-  return set_vol_pct(cur_vol - pct);
+  float cur_vol = get_cur_vol_pct(mapped, channel);
+  return set_vol_pct(cur_vol - pct, mapped);
 }
 
-float Mixer::inc_vol_pct(float pct, snd_mixer_selem_channel_id_t channel)
+float Mixer::inc_vol_pct(float pct, bool mapped, snd_mixer_selem_channel_id_t channel)
 {
   trim_pct(pct);
-  float cur_vol = get_cur_vol_pct(channel);
-  return set_vol_pct(cur_vol + pct);
+  float cur_vol = get_cur_vol_pct(mapped, channel);
+  return set_vol_pct(cur_vol + pct, mapped);
 }
 
-float Mixer::set_vol_pct(float pct)
+float Mixer::set_vol_pct(float pct, bool mapped)
 {
   long min, max;
 
   trim_pct(pct);
-  get_vol_range(&min, &max);
-  set_vol_raw((long)((float)min + (pct * (max - min))));
-  return get_cur_vol_pct();
+  if(!mapped)
+  {
+      get_vol_range(&min, &max);
+      set_vol_raw((long)((float)min + (pct * (max - min))));
+  }
+  else
+  {
+      set_vol_mapped(pct);
+  }
+
+  return get_cur_vol_pct(mapped);
 }
 
-float Mixer::get_cur_vol_pct(snd_mixer_selem_channel_id_t channel)
+float Mixer::get_cur_vol_pct(bool mapped, snd_mixer_selem_channel_id_t channel)
 {
-  long min, max, cur;
-  get_vol_range(&min, &max);
-  cur = get_cur_vol_raw(channel);
-  return round((float)cur / (max - min) * 100.0) / 100.0;
+  if(!mapped)
+  {
+      long min, max, cur;
+      get_vol_range(&min, &max);
+      cur = get_cur_vol_raw(channel);
+      return round((float)cur / (max - min) * 100.0) / 100.0;
+  }
+  else
+  {
+      return get_vol_mapped(channel);
+  }
 }
 
 float Mixer::mute()
@@ -168,6 +181,79 @@ void Mixer::set_vol_raw(long vol)
 
   if (err < 0)
     handle_error_code(err, false, "Cannot set volume to requested value.");
+}
+
+int Mixer::get_mapped_volume_range(snd_mixer_elem_t *elem, long *pmin, long *pmax)
+{
+    *pmin = 0;
+    *pmax = MAP_VOL_RES;
+    return 0;
+}
+
+float Mixer::get_vol_mapped(snd_mixer_selem_channel_id_t channel)
+{
+    return get_normalized_volume(channel);
+}
+
+float Mixer::get_normalized_volume(snd_mixer_selem_channel_id_t channel)
+{
+    long min, max, value;
+    float normalized, min_norm;
+    int err = snd_mixer_selem_get_playback_dB_range(element_handle, &min, &max);
+    if (err < 0 || min >= max) {
+        return get_cur_vol_pct();
+    }
+
+    err = snd_mixer_selem_get_playback_dB(element_handle, channel, &value);
+    if (err < 0)
+        handle_error_code(err, false, "Could not get volume for provided channel.");
+
+    if (max - min <= MAX_LINEAR_DB_SCALE * 100) {
+        return (value - min) / (double)(max - min);
+    }
+
+    normalized = exp10((value - max) / 6000.0);
+    if (min != SND_CTL_TLV_DB_GAIN_MUTE) {
+        min_norm = exp10((min - max) / 6000.0);
+        normalized = (normalized - min_norm) / (1 - min_norm);
+    }
+
+    return normalized;
+}
+
+void Mixer::set_vol_mapped(float pct)
+{
+    long min, max;
+    get_mapped_volume_range(element_handle, &min, &max);
+    int err = set_normalized_volume(((float)min + (pct * (max - min))) / MAP_VOL_RES);
+    if (err < 0)
+        handle_error_code(err, false, "Cannot set volume to requested value.");
+}
+
+int Mixer::set_normalized_volume(float pct)
+{
+    long min, max, value;
+    double min_norm;
+    int err = snd_mixer_selem_get_playback_dB_range(element_handle, &min, &max);
+    if (err < 0 || min >= max) {
+      get_vol_range(&min, &max);
+      set_vol_raw((long)((float)min + (pct * (max - min))));
+      return 0;
+    }
+
+    if (max - min <= MAX_LINEAR_DB_SCALE * 100) {
+        value = lrint(pct * (max - min)) + min;
+        return snd_mixer_selem_set_playback_dB_all(element_handle, value, 0);
+    }
+
+    if (min != SND_CTL_TLV_DB_GAIN_MUTE) {
+        min_norm = exp10((min - max) / 6000.0);
+        pct = pct * (1 - min_norm) + min_norm;
+    }
+
+    value = lrint(6000.0 * log10(pct)) + max;
+    err = snd_mixer_selem_set_playback_dB_all(element_handle, value, 0);
+    return err;
 }
 
 long Mixer::get_cur_vol_raw(snd_mixer_selem_channel_id_t channel)

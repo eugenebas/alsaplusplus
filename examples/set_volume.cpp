@@ -11,12 +11,15 @@ int main(int argc, char** argv)
   {
     cxxopts::Options options("set_volume", "Sets master volume using the Mixer interface of AlsaPlusPlus.");
     options.positional_help("[volume pct]");
-    
+
     options.add_options()
+      ("o,device", "Device", cxxopts::value<std::string>())
+      ("c,control", "Control", cxxopts::value<std::string>())
       ("d,decrease", "Decrease volume by given percent [0.0 - 1.0].", cxxopts::value<float>())
       ("h,help", "Print help.")
       ("i,increase", "Increase volume by given percent [0.0 - 1.0].", cxxopts::value<float>())
-      ("v,volume", "Set volume to given percent [0.0 - 1.0].", cxxopts::value<float>());
+      ("v,volume", "Set volume to given percent [0.0 - 1.0].", cxxopts::value<float>())
+      ("m,mapped", "Set mapped volume to given percent [0.0 - 1.0].", cxxopts::value<float>());
 
     options.parse_positional("volume");
     options.parse(argc, argv);
@@ -27,7 +30,7 @@ int main(int argc, char** argv)
       return 0;
     }
 
-    Mixer m("default", "Master");
+    Mixer m(options["device"].as<std::string>(), options["control"].as<std::string>());
     float set_as;
 
     if (options.count("decrease"))
@@ -43,6 +46,11 @@ int main(int argc, char** argv)
     else if (options.count("volume"))
     {
       set_as = m.set_vol_pct(options["volume"].as<float>());
+      std::cout << "Volume was set to " << set_as * 100.0 << "%." << std::endl;
+    }
+    else if (options.count("mapped"))
+    {
+      set_as = m.set_vol_pct(options["mapped"].as<float>(), true);
       std::cout << "Volume was set to " << set_as * 100.0 << "%." << std::endl;
     }
     else
