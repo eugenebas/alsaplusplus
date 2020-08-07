@@ -149,7 +149,7 @@ float Mixer::get_cur_vol_pct(bool mapped, snd_mixer_selem_channel_id_t channel)
       long min, max, cur;
       get_vol_range(&min, &max);
       cur = get_cur_vol_raw(channel);
-      return round((float)cur / (max - min) * 100.0) / 100.0;
+      return ((float)cur / (max - min) * 100.0) / 100.0;
   }
   else
   {
